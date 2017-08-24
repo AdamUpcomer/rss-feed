@@ -1,31 +1,51 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 import feedparser
-from rake import *
 import operator
 import re
-import six
-from six.moves import range
-from collections import Counter
-from difflib import SequenceMatcher
+from rake import Rake
+import Levenshtein
 
-TITLE_IMPORTANCE = 2
-GAME_SIMILARITY_RATIO = 0.90
+# Constants
+TITLE_IMPORTANCE = 2  # Multiplicative factor for keywords associated with title
+KEYWORD_SIMILARITY_RATIO = 0.5  # Ratio for keyworda to be considered similar
+SIMILAR_KEYWORD_REQ = 2  # Number of keywords that need to be similar for article grouping
+MAX_WORD_LENGTH = 3  # Max number of words in keyword phrase
+
 
 feed_posts = []
-
 # Add feed sources
-sources = {'wc3': ['http://www.gosugamers.net/warcraft3/news/rss'],
-           'general': ['http://www.gosugamers.net/dota2/news/rss']}
+sources = {'general': ['http://www.mmogames.com/tag/esports/feed/',
+                       'http://www.gosugamers.net/news/rss']}
 game_keywords = {'lol': ['league of legends', 'lol', 'riot'],
                  'dota2': ['dota', 'dota2', 'defense of the ancients',
                            'defense of the ancients 2', 'the international',
-                           'ti7']}
-rake = Rake("SmartStoplist.txt")
+                           'ti7'],
+                 'csgo': ['csgo', 'counter-strike', 'counter strike', 'cs-go',
+                          'counter-strike:global offensive'],
+                 'overwatch': ['overwatch'],
+                 'wow': ['wow', 'world of warcraft'],
+                 'hots': ['hots', 'heroes of the storm'],
+                 'sc': ['starcraft 2', 'starcraft', 'sc2']}
+
+
+rake = Rake("SmartStoplist.txt", max_words_length=MAX_WORD_LENGTH)
 
 
 def similar(a, b):
-    return SequenceMatcher(None, a, b).ratio()
+    if type(a) is list:
+        similar_keywords = 0
+        for a_val in a:
+            for b_val in b:
+                if Levenshtein.ratio(a_val, b_val) > KEYWORD_SIMILARITY_RATIO:
+                    similar_keywords += 1
+        return similar_keywords >= SIMILAR_KEYWORD_REQ
+    return Levenshtein.ratio(a, b) > KEYWORD_SIMILARITY_RATIO
+
+
+def remove_tags(text):
+    TAG_RE = re.compile(r'<[^>]+>')
+    return TAG_RE.sub('', text)
 
 
 def match_game(title, summary, keywords):
@@ -35,9 +55,6 @@ def match_game(title, summary, keywords):
                 return temp_game
             if game_keyword in summary:
                 return temp_game
-            for keyword in keywords:
-                if similar(keyword, game_keyword) >= GAME_SIMILARITY_RATIO:
-                    return temp_game
     return 'untagged'
 
 
@@ -52,8 +69,12 @@ def add_post(data, game):
     for keyword in summary_keywords:
         if keyword in title_keywords:
             title_keywords[keyword] += summary_keywords[keyword]
-        else:
-            title_keywords[keyword] = summary_keywords[keyword]
+            continue
+        for temp_keyword in title_keywords:
+            if similar(temp_keyword, keyword):
+                title_keywords[temp_keyword] += summary_keywords[keyword]
+                break
+        title_keywords[keyword] = summary_keywords[keyword]
     # Sort keywords and keep top 5
     keywords_list = sorted(title_keywords.iteritems(), key=operator.itemgetter(1), reverse=True)
     keywords = [str(x[0]) for x in keywords_list[:5]]
@@ -62,9 +83,14 @@ def add_post(data, game):
         tagged_game = match_game(data['title'], data['summary_detail']['value'], keywords)
     else:
         tagged_game = game
+    # Check if any post matches this one
+    for post in feed_posts:
+        if similar(post['keywords'], keywords) > KEYWORD_SIMILARITY_RATIO:
+            # Decide which post to add here
+            return
     # Add post to our feed
-    feed_posts.append({'title': data['title'],
-                       'summary': data['summary_detail']['value'],
+    feed_posts.append({'title': remove_tags(data['title']),
+                       'summary': remove_tags(data['summary_detail']['value']),
                        'link': data['links'][0]['href'],
                        'published': data['published_parsed'],
                        'keywords': keywords,
@@ -84,7 +110,13 @@ feed_posts = sorted(feed_posts, key=lambda x: x['published'], reverse=True)
 
 # Print Feed
 for post in feed_posts:
-    print(post)
+    print("----------------- POST ------------------")
+    print("TITLE: " + post['title'])
+    print("SUMMARY: " + post['summary'])
+    print("KEYWORDS: " + str(post['keywords']))
+    print("GAME: " + post['game'])
+    print(" ")
+    print(" ")
 
 
 
